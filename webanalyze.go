@@ -25,10 +25,13 @@ var (
 
 // Result type encapsulates the result information from a given host
 type Result struct {
-	Host     string        `json:"host"`
-	Matches  []Match       `json:"matches"`
-	Duration time.Duration `json:"duration"`
-	Error    error         `json:"error"`
+	Host        string        `json:"host"`
+	Matches     []Match       `json:"matches"`
+	Duration    time.Duration `json:"duration"`
+	Error       string        `json:"error"`
+	WebTitle    string        `json:"web_title"`
+	WebKeywords string        `json:"web_keywords"`
+	WebDesc     string        `json:"web_desc"`
 }
 
 // Match type encapsulates the App information from a match on a document
@@ -135,14 +138,14 @@ func worker(c chan *Job, results chan Result, wg *sync.WaitGroup) {
 		t0 := time.Now()
 		result, err := process(job)
 		t1 := time.Now()
-
-		res := Result{
-			Host:     job.URL,
-			Matches:  result,
-			Duration: t1.Sub(t0),
-			Error:    err,
+		result.Duration = t1.Sub(t0)
+		if err != nil {
+			result.Error = fmt.Sprintf("%s", err)
+		} else {
+			result.Error = ""
 		}
-		results <- res
+
+		results <- result
 	}
 	wg.Done()
 }
@@ -221,8 +224,10 @@ func parseLinks(doc *goquery.Document, base *url.URL) []string {
 }
 
 // do http request and analyze response
-func process(job *Job) ([]Match, error) {
-	var apps = make([]Match, 0)
+func process(job *Job) (Result, error) {
+	var result Result
+	result.Host = job.URL
+	result.Matches = make([]Match, 0)
 	var err error
 
 	var cookies []*http.Cookie
@@ -238,7 +243,8 @@ func process(job *Job) ([]Match, error) {
 	} else {
 		resp, err := fetchHost(job.URL)
 		if err != nil {
-			return nil, fmt.Errorf("Failed to retrieve")
+			result.Error = fmt.Sprintf("%s", err)
+			return result, fmt.Errorf("Failed to retrieve")
 		}
 
 		defer resp.Body.Close()
@@ -256,7 +262,8 @@ func process(job *Job) ([]Match, error) {
 
 	doc, err := goquery.NewDocumentFromReader(bytes.NewReader(body))
 	if err != nil {
-		return nil, err
+		result.Error = fmt.Sprintf("%s", err)
+		return result, err
 	}
 
 	// handle crawling
@@ -271,6 +278,23 @@ func process(job *Job) ([]Match, error) {
 		}
 		wa.wgJobs.Done()
 	}
+
+	var title, keywords, descripiton string
+	//查找网页标题、关键词、描述
+	title = doc.Find("title").First().Text()
+
+	doc.Find("meta").Each(func(i int, s *goquery.Selection) {
+		name := s.AttrOr("name", "")
+		if name == "keywords" {
+			keywords = s.AttrOr("content", "")
+		} else if name == "description" {
+			descripiton = s.AttrOr("content", "")
+		}
+	})
+
+	result.WebTitle = title
+	result.WebKeywords = keywords
+	result.WebDesc = descripiton
 
 	for appname, app := range AppDefs.Apps {
 		// TODO: Reduce complexity in this for-loop by functionalising out
@@ -343,7 +367,7 @@ func process(job *Job) ([]Match, error) {
 		}
 
 		if len(findings.Matches) > 0 {
-			apps = append(apps, findings)
+			result.Matches = append(result.Matches, findings)
 
 			// handle implies
 			for _, implies := range app.Implies {
@@ -357,14 +381,14 @@ func process(job *Job) ([]Match, error) {
 						AppName: implyAppname,
 						Matches: make([][]string, 0),
 					}
-					apps = append(apps, f2)
+					result.Matches = append(result.Matches, f2)
 				}
 
 			}
 		}
 	}
 
-	return apps, nil
+	return result, nil
 }
 
 // runs a list of regexes on content

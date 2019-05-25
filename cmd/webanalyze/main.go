@@ -1,9 +1,9 @@
 package main
 
 import (
-	"encoding/csv"
 	"encoding/json"
 	"flag"
+	"fmt"
 	"io"
 	"io/ioutil"
 	"log"
@@ -11,7 +11,7 @@ import (
 	"runtime"
 	"strings"
 
-	"github.com/rverton/webanalyze"
+	"github.com/benderpan/webanalyze"
 )
 
 var (
@@ -84,72 +84,27 @@ func main() {
 
 	log.Printf("Scanning with %v workers.", workers)
 
-	var (
-		res       []webanalyze.Result
-		outWriter *csv.Writer
-	)
-
-	if outputMethod == "csv" {
-		outWriter = csv.NewWriter(os.Stdout)
-		outWriter.Write([]string{"Host", "Category", "App", "Version"})
-
-		defer outWriter.Flush()
-
+	f, err := os.OpenFile("data.json", os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		fmt.Println("data.json file create failed. err: " + err.Error())
 	}
+	defer f.Close()
 
 	for result := range results {
-		res = append(res, result)
-
-		if result.Error != nil {
-			log.Printf("[-] Error for %v: %v", result.Host, result.Error)
+		if result.Error != "" {
+			log.Printf("[Debug] Error: Host=%s  Msg=%s", result.Host, result.Error)
 		}
 
-		switch outputMethod {
-		case "stdout":
-			log.Printf("[+] %v (%v):\n", result.Host, result.Duration)
-			for _, a := range result.Matches {
-
-				var categories []string
-
-				for _, cid := range a.App.Cats {
-					categories = append(categories, webanalyze.AppDefs.Cats[string(cid)].Name)
-				}
-
-				log.Printf("\t- %v, %v (%v)\n", a.AppName, a.Version, strings.Join(categories, ", "))
-			}
-			if len(result.Matches) <= 0 {
-				log.Printf("\t<no results>\n")
-			}
-
-		case "csv":
-			for _, m := range result.Matches {
-				outWriter.Write(
-					[]string{
-						result.Host,
-						strings.Join(m.CatNames, ","),
-						m.AppName,
-						m.Version,
-					},
-				)
-			}
-			outWriter.Flush()
-		case "json":
-
-			output := struct {
-				Hostname string             `json:"hostname"`
-				Matches  []webanalyze.Match `json:"matches"`
-			}{
-				result.Host,
-				result.Matches,
-			}
-
-			b, err := json.Marshal(output)
-			if err != nil {
-				log.Printf("cannot marshal output: %v\n", err)
-			}
-
-			b = append(b, '\n')
-			os.Stdout.Write(b)
+		jsonValue, err := json.Marshal(result)
+		if err != nil {
+			os.Stdout.Write([]byte("{}\n"))
+			f.Write([]byte("{}\n"))
+		} else {
+			jsonValue = append(jsonValue, '\n')
+			os.Stdout.Write(jsonValue)
+			f.Write(jsonValue)
 		}
+
 	}
+
 }
